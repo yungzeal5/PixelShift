@@ -49,8 +49,8 @@ const Header = () => {
             letterSpacing: "-0.02em",
           }}
         >
-          <span style={{ color: "var(--color-accent)" }}>YungZeal</span>
-          <span style={{ color: "var(--color-text-muted)" }}>.DEV</span>
+          <span style={{ color: "var(--color-accent)" }}>Pixel</span>
+          <span style={{ color: "var(--color-text-muted)" }}>SHIFT</span>
         </span>
       </div>
 
