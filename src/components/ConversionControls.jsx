@@ -104,7 +104,6 @@ const ConversionControls = ({
                   padding: "2px 8px",
                   backgroundColor: "var(--color-primary)",
                   borderRadius: "var(--radius-sm)",
-                  color: "white",
                 }}
               >
                 {quality}%
