@@ -1,75 +1,171 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { ThemeProvider } from "./context/ThemeContext";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import DropZone from "./components/DropZone";
-import ImagePreview from "./components/ImagePreview";
+import BatchImageList from "./components/BatchImageList";
 import ConversionControls from "./components/ConversionControls";
 import FileStats from "./components/FileStats";
 import DownloadButton from "./components/DownloadButton";
-import { convertImage } from "./utils/imageConverter";
-import { Sparkles, Image as ImageIcon, Zap, Shield } from "lucide-react";
+import { convertImage, generateOutputFilename } from "./utils/imageConverter";
+import {
+  Sparkles,
+  Image as ImageIcon,
+  Zap,
+  Shield,
+  Images,
+} from "lucide-react";
+
+let imageIdCounter = 0;
 
 const AppContent = () => {
-  const [originalFile, setOriginalFile] = useState(null);
-  const [originalPreview, setOriginalPreview] = useState(null);
-  const [convertedBlob, setConvertedBlob] = useState(null);
-  const [convertedPreview, setConvertedPreview] = useState(null);
+  const [images, setImages] = useState([]);
   const [format, setFormat] = useState("webp");
   const [quality, setQuality] = useState(85);
   const [isConverting, setIsConverting] = useState(false);
+  const conversionRef = useRef(null);
 
   // Clean up object URLs on unmount
   useEffect(() => {
     return () => {
-      if (originalPreview) URL.revokeObjectURL(originalPreview);
-      if (convertedPreview) URL.revokeObjectURL(convertedPreview);
+      images.forEach((img) => {
+        if (img.preview) URL.revokeObjectURL(img.preview);
+        if (img.convertedPreview) URL.revokeObjectURL(img.convertedPreview);
+      });
     };
   }, []);
 
-  const handleFileSelect = useCallback(
-    (file) => {
-      // Clean up previous previews
-      if (originalPreview) URL.revokeObjectURL(originalPreview);
-      if (convertedPreview) URL.revokeObjectURL(convertedPreview);
+  const handleFilesSelect = useCallback((files) => {
+    const newImages = files.map((file) => ({
+      id: ++imageIdCounter,
+      file,
+      preview: URL.createObjectURL(file),
+      convertedBlob: null,
+      convertedPreview: null,
+      status: "pending",
+    }));
 
-      setOriginalFile(file);
-      setOriginalPreview(URL.createObjectURL(file));
-      setConvertedBlob(null);
-      setConvertedPreview(null);
-    },
-    [originalPreview, convertedPreview]
-  );
+    setImages((prev) => [...prev, ...newImages].slice(0, 10));
+  }, []);
 
-  const handleConvert = useCallback(async () => {
-    if (!originalFile) return;
+  const handleRemoveImage = useCallback((id) => {
+    setImages((prev) => {
+      const image = prev.find((img) => img.id === id);
+      if (image) {
+        if (image.preview) URL.revokeObjectURL(image.preview);
+        if (image.convertedPreview) URL.revokeObjectURL(image.convertedPreview);
+      }
+      return prev.filter((img) => img.id !== id);
+    });
+  }, []);
+
+  const handleClearAll = useCallback(() => {
+    images.forEach((img) => {
+      if (img.preview) URL.revokeObjectURL(img.preview);
+      if (img.convertedPreview) URL.revokeObjectURL(img.convertedPreview);
+    });
+    setImages([]);
+  }, [images]);
+
+  const handleConvertAll = useCallback(async () => {
+    if (images.length === 0 || isConverting) return;
+
+    // Cancel any pending conversion
+    if (conversionRef.current) {
+      conversionRef.current.cancelled = true;
+    }
+    const thisConversion = { cancelled: false };
+    conversionRef.current = thisConversion;
 
     setIsConverting(true);
 
-    try {
-      // Clean up previous converted preview
-      if (convertedPreview) URL.revokeObjectURL(convertedPreview);
+    // Set all to converting status
+    setImages((prev) =>
+      prev.map((img) => ({
+        ...img,
+        status: "converting",
+        convertedBlob: null,
+        convertedPreview: img.convertedPreview
+          ? (URL.revokeObjectURL(img.convertedPreview), null)
+          : null,
+      })),
+    );
 
-      const blob = await convertImage(originalFile, format, quality);
-      setConvertedBlob(blob);
-      setConvertedPreview(URL.createObjectURL(blob));
-    } catch (error) {
-      console.error("Conversion failed:", error);
-      alert("Failed to convert image. Please try again.");
-    } finally {
-      setIsConverting(false);
+    // Process images sequentially
+    for (let i = 0; i < images.length; i++) {
+      if (thisConversion.cancelled) break;
+
+      const img = images[i];
+
+      try {
+        const blob = await convertImage(img.file, format, quality);
+
+        if (thisConversion.cancelled) break;
+
+        setImages((prev) =>
+          prev.map((prevImg) =>
+            prevImg.id === img.id
+              ? {
+                  ...prevImg,
+                  convertedBlob: blob,
+                  convertedPreview: URL.createObjectURL(blob),
+                  status: "done",
+                }
+              : prevImg,
+          ),
+        );
+      } catch (error) {
+        console.error(`Failed to convert ${img.file.name}:`, error);
+
+        if (thisConversion.cancelled) break;
+
+        setImages((prev) =>
+          prev.map((prevImg) =>
+            prevImg.id === img.id ? { ...prevImg, status: "error" } : prevImg,
+          ),
+        );
+      }
     }
-  }, [originalFile, format, quality, convertedPreview]);
 
-  // Auto-convert when format or quality changes (if we have an original file)
+    setIsConverting(false);
+  }, [images, format, quality, isConverting]);
+
+  // Auto-convert when format or quality changes (if we have images)
   useEffect(() => {
-    if (originalFile && !isConverting) {
+    if (images.length > 0 && !isConverting) {
       const timer = setTimeout(() => {
-        handleConvert();
+        handleConvertAll();
       }, 300); // Debounce
       return () => clearTimeout(timer);
     }
-  }, [format, quality, originalFile]);
+  }, [format, quality]);
+
+  // Auto-convert when new images are added
+  useEffect(() => {
+    const hasPending = images.some((img) => img.status === "pending");
+    if (hasPending && !isConverting) {
+      const timer = setTimeout(() => {
+        handleConvertAll();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [images.length]);
+
+  const handleDownloadSingle = useCallback(
+    (image) => {
+      if (!image.convertedBlob) return;
+
+      const url = URL.createObjectURL(image.convertedBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = generateOutputFilename(image.file.name, format);
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    [format],
+  );
 
   return (
     <div
@@ -85,13 +181,13 @@ const AppContent = () => {
         style={{
           flex: 1,
           padding: "32px",
-          maxWidth: "900px",
+          maxWidth: "1100px",
           margin: "0 auto",
           width: "100%",
         }}
       >
         {/* Hero Section */}
-        {!originalFile && (
+        {images.length === 0 && (
           <div
             className="animate-fade-in"
             style={{
@@ -131,8 +227,8 @@ const AppContent = () => {
                 lineHeight: 1.6,
               }}
             >
-              Transform your images to any format with precision quality
-              control. Fast, private, and runs entirely in your browser.
+              Transform up to 10 images at once with precision quality control.
+              Fast, private, and runs entirely in your browser.
             </p>
 
             {/* Features */}
@@ -148,7 +244,7 @@ const AppContent = () => {
               {[
                 { icon: Zap, text: "Lightning Fast" },
                 { icon: Shield, text: "100% Private" },
-                { icon: ImageIcon, text: "Multiple Formats" },
+                { icon: Images, text: "Batch Convert" },
               ].map(({ icon: Icon, text }) => (
                 <div
                   key={text}
@@ -168,8 +264,8 @@ const AppContent = () => {
           </div>
         )}
 
-        {/* Title when image is loaded */}
-        {originalFile && (
+        {/* Title when images are loaded */}
+        {images.length > 0 && (
           <div
             className="animate-fade-in"
             style={{
@@ -191,64 +287,48 @@ const AppContent = () => {
               }}
             >
               <Sparkles size={24} style={{ color: "var(--color-accent)" }} />
-              Image Converter
+              Batch Converter
             </h2>
-            <button
-              className="btn btn-secondary"
-              onClick={() => {
-                if (originalPreview) URL.revokeObjectURL(originalPreview);
-                if (convertedPreview) URL.revokeObjectURL(convertedPreview);
-                setOriginalFile(null);
-                setOriginalPreview(null);
-                setConvertedBlob(null);
-                setConvertedPreview(null);
-              }}
-              style={{ fontSize: "14px", padding: "8px 16px" }}
-            >
-              Upload New
-            </button>
           </div>
         )}
 
         {/* Drop Zone */}
-        {!originalFile && (
-          <DropZone onFileSelect={handleFileSelect} disabled={isConverting} />
-        )}
+        <DropZone
+          onFilesSelect={handleFilesSelect}
+          disabled={isConverting}
+          currentCount={images.length}
+        />
 
         {/* Conversion Controls */}
-        {originalFile && (
+        {images.length > 0 && (
           <ConversionControls
             format={format}
             setFormat={setFormat}
             quality={quality}
             setQuality={setQuality}
-            onConvert={handleConvert}
+            onConvert={handleConvertAll}
             isConverting={isConverting}
-            disabled={!originalFile}
+            disabled={images.length === 0}
           />
         )}
 
-        {/* Image Preview */}
-        <ImagePreview
-          originalFile={originalFile}
-          originalPreview={originalPreview}
-          convertedPreview={convertedPreview}
+        {/* Batch Image List */}
+        <BatchImageList
+          images={images}
+          onRemove={handleRemoveImage}
+          onClearAll={handleClearAll}
+          onDownloadSingle={handleDownloadSingle}
+          format={format}
           isConverting={isConverting}
         />
 
         {/* File Stats */}
-        {originalFile && (
-          <FileStats
-            originalSize={originalFile?.size}
-            convertedSize={convertedBlob?.size}
-          />
-        )}
+        <FileStats images={images} />
 
-        {/* Download Button */}
+        {/* Download All Button */}
         <DownloadButton
-          convertedBlob={convertedBlob}
+          images={images}
           format={format}
-          originalFileName={originalFile?.name}
           disabled={isConverting}
         />
       </main>

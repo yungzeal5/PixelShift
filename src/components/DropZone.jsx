@@ -1,8 +1,11 @@
 import React, { useCallback, useState } from "react";
-import { Upload, Image as ImageIcon } from "lucide-react";
+import { Upload, Image as ImageIcon, AlertCircle } from "lucide-react";
 
-const DropZone = ({ onFileSelect, disabled }) => {
+const MAX_IMAGES = 10;
+
+const DropZone = ({ onFilesSelect, disabled, currentCount = 0 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
+  const [limitWarning, setLimitWarning] = useState(null);
 
   const handleDragOver = useCallback(
     (e) => {
@@ -12,7 +15,7 @@ const DropZone = ({ onFileSelect, disabled }) => {
         setIsDragOver(true);
       }
     },
-    [disabled]
+    [disabled],
   );
 
   const handleDragLeave = useCallback((e) => {
@@ -20,6 +23,36 @@ const DropZone = ({ onFileSelect, disabled }) => {
     e.stopPropagation();
     setIsDragOver(false);
   }, []);
+
+  const processFiles = useCallback(
+    (fileList) => {
+      const imageFiles = Array.from(fileList).filter((file) =>
+        file.type.startsWith("image/"),
+      );
+
+      if (imageFiles.length === 0) return;
+
+      const remainingSlots = MAX_IMAGES - currentCount;
+
+      if (remainingSlots <= 0) {
+        setLimitWarning(`Maximum ${MAX_IMAGES} images allowed`);
+        setTimeout(() => setLimitWarning(null), 3000);
+        return;
+      }
+
+      const filesToAdd = imageFiles.slice(0, remainingSlots);
+
+      if (imageFiles.length > remainingSlots) {
+        setLimitWarning(
+          `Only ${filesToAdd.length} of ${imageFiles.length} images added (limit: ${MAX_IMAGES})`,
+        );
+        setTimeout(() => setLimitWarning(null), 3000);
+      }
+
+      onFilesSelect(filesToAdd);
+    },
+    [onFilesSelect, currentCount],
+  );
 
   const handleDrop = useCallback(
     (e) => {
@@ -29,27 +62,18 @@ const DropZone = ({ onFileSelect, disabled }) => {
 
       if (disabled) return;
 
-      const files = e.dataTransfer.files;
-      if (files && files.length > 0) {
-        const file = files[0];
-        if (file.type.startsWith("image/")) {
-          onFileSelect(file);
-        }
-      }
+      processFiles(e.dataTransfer.files);
     },
-    [onFileSelect, disabled]
+    [disabled, processFiles],
   );
 
   const handleFileInput = useCallback(
     (e) => {
-      const file = e.target.files?.[0];
-      if (file && file.type.startsWith("image/")) {
-        onFileSelect(file);
-      }
-      // Reset input so same file can be selected again
+      processFiles(e.target.files);
+      // Reset input so same files can be selected again
       e.target.value = "";
     },
-    [onFileSelect]
+    [processFiles],
   );
 
   const handleClick = () => {
@@ -57,6 +81,8 @@ const DropZone = ({ onFileSelect, disabled }) => {
       document.getElementById("file-input").click();
     }
   };
+
+  const isFull = currentCount >= MAX_IMAGES;
 
   return (
     <div
@@ -69,15 +95,19 @@ const DropZone = ({ onFileSelect, disabled }) => {
         padding: "48px 32px",
         borderRadius: "var(--radius-xl)",
         border: `2px dashed ${
-          isDragOver ? "var(--color-primary)" : "var(--color-border)"
+          isFull
+            ? "var(--color-warning)"
+            : isDragOver
+              ? "var(--color-primary)"
+              : "var(--color-border)"
         }`,
         backgroundColor: isDragOver
           ? "rgba(59, 130, 246, 0.05)"
           : "var(--color-surface)",
-        cursor: disabled ? "not-allowed" : "pointer",
+        cursor: disabled || isFull ? "not-allowed" : "pointer",
         transition: "all var(--transition-normal)",
         textAlign: "center",
-        opacity: disabled ? 0.6 : 1,
+        opacity: disabled || isFull ? 0.6 : 1,
         transform: isDragOver ? "scale(1.01)" : "scale(1)",
       }}
     >
@@ -87,8 +117,35 @@ const DropZone = ({ onFileSelect, disabled }) => {
         accept="image/jpeg,image/jpg,image/png,image/webp,image/gif,image/bmp"
         onChange={handleFileInput}
         style={{ display: "none" }}
-        disabled={disabled}
+        disabled={disabled || isFull}
+        multiple
       />
+
+      {/* Limit Warning Toast */}
+      {limitWarning && (
+        <div
+          className="animate-fade-in"
+          style={{
+            position: "absolute",
+            top: "12px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            backgroundColor: "rgba(245, 158, 11, 0.15)",
+            border: "1px solid rgba(245, 158, 11, 0.3)",
+            borderRadius: "var(--radius-md)",
+            padding: "8px 16px",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            color: "var(--color-warning)",
+            fontSize: "13px",
+            fontWeight: "500",
+          }}
+        >
+          <AlertCircle size={16} />
+          {limitWarning}
+        </div>
+      )}
 
       <div
         style={{
@@ -128,9 +185,11 @@ const DropZone = ({ onFileSelect, disabled }) => {
               color: "var(--color-text-primary)",
             }}
           >
-            {isDragOver
-              ? "Drop your image here"
-              : "Drop an image or click to upload"}
+            {isFull
+              ? "Maximum images reached"
+              : isDragOver
+                ? "Drop your images here"
+                : "Drop images or click to upload"}
           </p>
           <p
             style={{
@@ -139,7 +198,9 @@ const DropZone = ({ onFileSelect, disabled }) => {
               color: "var(--color-text-muted)",
             }}
           >
-            Supports JPG, PNG, WebP, GIF, BMP
+            {isFull
+              ? `${currentCount}/${MAX_IMAGES} images`
+              : `Up to ${MAX_IMAGES} images • JPG, PNG, WebP, GIF, BMP`}
           </p>
         </div>
       </div>
